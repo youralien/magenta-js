@@ -23,7 +23,7 @@ import * as tf from '@tensorflow/tfjs-core';
 import {logging, sequences} from '..';
 import {INoteSequence} from '../protobuf';
 
-import {IS_IOS, NUM_PITCHES, pianorollToSequence, sequenceToPianoroll} from './coconet_utils';
+import {IS_IOS, NUM_PITCHES, NUM_VOICES, pianorollToSequence, sequenceToPianoroll} from './coconet_utils';
 
 /**
  * An interface for providing an infilling mask.
@@ -457,6 +457,64 @@ class Coconet {
     samples.dispose();
     outerMasks.dispose();
     return outputSequence;
+  }
+
+  /**
+   * Similar to `infill` but we specify `n` to be generated of a single
+   * input.
+   * @param sequence The sequence to infill. Must be quantized.
+   * @param nSamples The number of samples to generate an infilled image
+   * @param config (Optional) Infill parameterers like temperature, the number
+   * of sampling iterations, or masks.
+   */
+  async infillNSamples(sequence: INoteSequence, nSamples: number, config?: CoconetConfig) {
+    sequences.assertIsRelativeQuantizedSequence(sequence);
+    if (sequence.notes.length === 0) {
+      throw new Error(
+          `NoteSequence ${sequence.id} does not have any notes to infill.`);
+    }
+    const numSteps = sequence.totalQuantizedSteps ||
+        sequence.notes[sequence.notes.length - 1].quantizedEndStep;
+
+    // Convert the sequence to a batch of piano rolls of nSamples.
+    const pianoroll = sequenceToPianoroll(sequence, numSteps);
+    const pianorollsList = [];
+    for (let i = 0; i < nSamples; i++) {
+      pianorollsList.push(pianoroll);
+    }
+    const pianorolls = tf.stack(pianorollsList).as4D(
+      nSamples, numSteps, NUM_PITCHES, NUM_VOICES);
+
+    // Figure out the sampling configuration.
+    let temperature = 0.99;
+    let numIterations = 96;
+    let outerMasks;
+    if (config) {
+      numIterations = config.numIterations || numIterations;
+      temperature = config.temperature || temperature;
+      outerMasks =
+          this.getCompletionMaskFromInput(config.infillMask, pianoroll);
+    } else {
+      outerMasks = this.getCompletionMask(pianoroll);
+    }
+
+    // Run sampling on the pianoroll.
+    const samples =
+        await this.run(pianorolls, numIterations, temperature, outerMasks);
+
+    // Convert the resulting pianoroll samples to noteSequences.
+    const outputSequences = [];
+    for (let i = 0; i < nSamples; i++) {
+      const sample = samples.slice([i, 0, 0, 0],
+                                   [1, numSteps, NUM_PITCHES, NUM_VOICES]);
+      outputSequences.push(pianorollToSequence(sample, numSteps));
+    }
+
+    pianoroll.dispose();
+    pianorolls.dispose();
+    samples.dispose();
+    outerMasks.dispose();
+    return outputSequences;
   }
 
   /**
