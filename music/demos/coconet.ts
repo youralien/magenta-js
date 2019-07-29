@@ -108,8 +108,56 @@ async function infillSection() {
   model.dispose();
 }
 
+async function infillSectionDiscourageNotes() {
+  const model = new mm.Coconet(`${CHECKPOINTS_DIR}/coconet/bach`);
+  await model.initialize();
+
+  // First voice.
+  const ns = mm.NoteSequence.create();
+
+  for (let i = 0; i < 32; i++) {
+    // Leave silence for 4 beats, between time steps 4 and 8, to
+    // show that using a mask doesn't infill space.
+    if (i < 8 && i > 4) {
+      continue;
+    }
+    // One per voice.
+    for (let v = 0; v < 4; v++) {
+      const note = new NoteSequence.Note();
+      note.pitch = 76 - 10 * v;  // Different pitches for each voice.
+      note.instrument = v;
+      note.quantizedStartStep = i;
+      note.quantizedEndStep = note.quantizedStartStep + 1;
+      ns.notes.push(note);
+    }
+  }
+  ns.quantizationInfo = {stepsPerQuarter: 4};
+  ns.totalQuantizedSteps = 32;
+
+  // Remove everything between timesteps 10 and 30
+  const mask = [];
+  for (let i = 10; i < 30; i++) {
+    // Infill all voices.
+    for (let v = 0; v < 4; v++) {
+      mask.push({step: i, voice: v});
+    }
+  }
+  writeNoteSeqs('input-4', [ns], true);
+
+  const start = performance.now();
+  const output = await model.infill(ns,
+    {infillMask: mask, discourageNotes: true});
+
+  // Optionally, treat any consecutive notes as merged.
+  const fixedOutput = mergeConsecutiveNotes(output);
+  writeNoteSeqs('output-4', [fixedOutput], true);
+  writeTimer('time-4', start);
+  model.dispose();
+}
+
 try {
-  Promise.all([infillFirstVoice(), infillSecondVoice(), infillSection()])
+  Promise.all([infillFirstVoice(), infillSecondVoice(),
+               infillSection(), infillSectionDiscourageNotes()])
       .then(() => {
         writeMemory(tf.memory().numBytes);
       });

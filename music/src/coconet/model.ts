@@ -47,12 +47,16 @@ interface InfillMask {
  * `{step: number, voice: number}`, indicating which voice should be
  * infilled for a particular step. If this value isn't provided, then the model
  * will attempt to infill all the "silent" steps in the input sequence.
+ * @param discourageNotes (Optional) discourageNotes flag saying whether to 
+ * adjust gibbs sampling of notes. If true, the sampling is nudged towards not
+ * sampling notes from the original pianoroll. If false, the sampling is nudged
+ * towards sampling more of the notes. If not provided, sampling remains same.
  */
 interface CoconetConfig {
   temperature?: number;
   numIterations?: number;
   infillMask?: InfillMask[];
-  softPriors?: InfillMask[];
+  discourageNotes?: boolean;
 }
 
 interface LayerSpec {
@@ -403,6 +407,7 @@ class Coconet {
     });
   }
 
+  /*
   private printPianorolls(pianorolls: tf.Tensor4D) {
     const voiceIdxs = [0, 1, 2, 3];
     voiceIdxs.forEach(voice => {
@@ -413,6 +418,7 @@ class Coconet {
       voiceroll.print();
     });
   }
+  */
 
   /**
    * Use the model to generate a Bach-style 4-part harmony, conditioned on an
@@ -449,17 +455,19 @@ class Coconet {
     let temperature = 0.99;
     let numIterations = 96;
     let outerMasks;
+    let discourageNotes;
+    let softPriors;
 
-    // const softPriors = this.makeDumbSoftPrior(pianoroll);
-    const softPriors = this.priorOverOriginalNotes(pianoroll, true, 1);
-
-    this.printPianorolls(softPriors);
     if (config) {
       numIterations = config.numIterations || numIterations;
       temperature = config.temperature || temperature;
       outerMasks =
           this.getCompletionMaskFromInput(config.infillMask, pianoroll);
-      // todo(rlouie): make softpriors via interface
+      discourageNotes = (config.discourageNotes !== undefined) ?
+        config.discourageNotes : discourageNotes;
+      // softPriors = this.makeDumbSoftPrior(pianoroll);
+      softPriors = this.priorOverOriginalNotes(
+        pianoroll, discourageNotes, 1);
     } else {
       outerMasks = this.getCompletionMask(pianoroll);
     }
@@ -582,9 +590,8 @@ class Coconet {
       // console.log("gibbs predictions")
       // this.printPianorolls(predictions);
       await tf.nextFrame();
-      // const newPredictions = softPriors ?
-        // this.nudgeWithPrior(predictions, softPriors) : predictions;
-      const newPredictions = this.nudgeWithPrior(predictions, softPriors);
+      const newPredictions = softPriors ?
+        this.nudgeWithPrior(predictions, softPriors) : predictions;
       await tf.nextFrame();
       // console.log("gibbs newPredictions")
       // this.printPianorolls(newPredictions);

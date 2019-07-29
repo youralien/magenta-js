@@ -62,6 +62,22 @@ limitations under the License.
     <p><b>It took:</b> <code id="time-3"></code></p>
   </section>
 
+  <h2>Generate notes different from the original input when infilling a missing section</h2>
+  <p>This example is a slight modification of infilling a missing section. Normally, when
+    infilling a section, the notes are simply rewritten with the same probabilities. However,
+    a valid user need is searching for generated notes that are different from the original notes
+    from that section. We can tell the model to discourage generating duplicate notes by 
+    modifying the probability of selecting those same notes again; think of almost like the concept
+    of sampling without replacement. In order to discourage generating notes from the original input,
+    you can use the <code>discourageNotes</code> parameter to specify a flag on whether this behaviour
+    is desired.
+  </p>
+  <section>
+    <p><b>Input:</b> <code id="input-4"></code></p>
+    <p><b>Result:</b> <code id="output-4">Loading...</code></p>
+    <p><b>It took:</b> <code id="time-4"></code></p>
+  </section>
+
   <p><b>Total Leaked Memory:</b> <code id="leaked-memory"></code></b></p>
   <script src="coconet_bundle.js"></script>
 </body>
