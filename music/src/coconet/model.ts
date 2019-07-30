@@ -51,12 +51,15 @@ interface InfillMask {
  * adjust gibbs sampling of notes. If true, the sampling is nudged towards not
  * sampling notes from the original pianoroll. If false, the sampling is nudged
  * towards sampling more of the notes. If not provided, sampling remains same.
+ * @param nudgeFactor (Optional) multiplier for how much to nudge notes, when
+ * discourageNotes is set to true or false
  */
 interface CoconetConfig {
   temperature?: number;
   numIterations?: number;
   infillMask?: InfillMask[];
   discourageNotes?: boolean;
+  nudgeFactor?: number;
 }
 
 interface LayerSpec {
@@ -532,7 +535,7 @@ class Coconet {
    * @param {tf.Tensor4D} pianorolls
    * @param {bool} [discourageNotes] defaults to true 
    * @param {number} [nudgeFactor] defaults to 1. The probabilities will be
-   * nudged 3^(nudgeFactor)  
+   * nudged ~ 3^(nudgeFactor)  
    * @returns {tf.Tensor4D}
    */
   private priorOverOriginalNotes(

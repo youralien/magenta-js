@@ -145,8 +145,11 @@ async function infillSectionDiscourageNotes() {
   writeNoteSeqs('input-4', [ns], true);
 
   const start = performance.now();
-  const output = await model.infill(ns,
-    {infillMask: mask, discourageNotes: true});
+  const output = await model.infill(ns, {
+    infillMask: mask,
+    discourageNotes: true,
+    nudgeFactor: 2,
+  });
 
   // Optionally, treat any consecutive notes as merged.
   const fixedOutput = mergeConsecutiveNotes(output);
