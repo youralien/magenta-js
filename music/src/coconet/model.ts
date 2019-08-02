@@ -459,6 +459,7 @@ class Coconet {
     let numIterations = 96;
     let outerMasks;
     let discourageNotes;
+    let nudgeFactor;
     let softPriors;
 
     if (config) {
@@ -468,9 +469,10 @@ class Coconet {
           this.getCompletionMaskFromInput(config.infillMask, pianoroll);
       discourageNotes = (config.discourageNotes !== undefined) ?
         config.discourageNotes : discourageNotes;
-      // softPriors = this.makeDumbSoftPrior(pianoroll);
+      nudgeFactor = (config.nudgeFactor !== undefined) ?
+        config.nudgeFactor : nudgeFactor;
       softPriors = this.priorOverOriginalNotes(
-        pianoroll, discourageNotes, 1);
+        pianoroll, discourageNotes, nudgeFactor);
     } else {
       outerMasks = this.getCompletionMask(pianoroll);
     }
@@ -533,35 +535,34 @@ class Coconet {
    * nudged by the soft prior since the masking code already handles 
    * 
    * @param {tf.Tensor4D} pianorolls
-   * @param {bool} [discourageNotes] defaults to true 
-   * @param {number} [nudgeFactor] defaults to 1. The probabilities will be
+   * @param {bool} [discourageNotes] if undefined, creates an identity prior
+   * @param {number} [nudgeFactor] The probabilities will be
    * nudged ~ 3^(nudgeFactor)  
    * @returns {tf.Tensor4D}
    */
   private priorOverOriginalNotes(
-      pianorolls: tf.Tensor4D, discourageNotes = true,
-      nudgeFactor = 1): tf.Tensor4D {
-
-    return tf.tidy(() => {
-      const hardPrior = (discourageNotes) ?
-        // nudge * (1.5 - pianorolls)
-        // when prior is used, probabilities for...
-        // notes in pianoroll (1s) are nudge*0.5 smaller
-        // notes not in pianoroll (0s) are nudge*1.5 larger 
-        // Thus, 3^(nudgeFactor) likelihood decrease for
-        // notes in pianoroll to be selected 
-        tf.mul(tf.scalar(nudgeFactor),
-               tf.scalar(1.5).sub(pianorolls)) as tf.Tensor4D:
-        // nudge * (0.5 + pianorolls)
-        // when prior is used, probabilities for...
-        // notes in pianoroll (1s) are nudge*1.5 larger 
-        // notes not in pianoroll (0s) are nudge*0.5 smaller 
-        // Thus, 3^(nudgeFactor) likelihood decrease for
-        // notes in pianoroll to be selected 
-        tf.mul(tf.scalar(nudgeFactor),
-               tf.scalar(0.5).add(pianorolls)) as tf.Tensor4D;
-      return hardPrior;
-    });
+      pianorolls: tf.Tensor4D, discourageNotes,
+      nudgeFactor): tf.Tensor4D {
+    if (discourageNotes === undefined && nudgeFactor === undefined) {
+      return tf.onesLike(pianorolls);
+    }
+    return (discourageNotes) ?
+      // nudge * (1.5 - pianorolls)
+      // when prior is used, probabilities for...
+      // notes in pianoroll (1s) are nudge*0.5 smaller
+      // notes not in pianoroll (0s) are nudge*1.5 larger
+      // Thus, 3^(nudgeFactor) likelihood decrease for
+      // notes in pianoroll to be selected
+      tf.mul(tf.scalar(nudgeFactor),
+              tf.scalar(1.5).sub(pianorolls)) as tf.Tensor4D:
+      // nudge * (0.5 + pianorolls)
+      // when prior is used, probabilities for...
+      // notes in pianoroll (1s) are nudge*1.5 larger
+      // notes not in pianoroll (0s) are nudge*0.5 smaller
+      // Thus, 3^(nudgeFactor) likelihood decrease for
+      // notes in pianoroll to be selected
+      tf.mul(tf.scalar(nudgeFactor),
+              tf.scalar(0.5).add(pianorolls)) as tf.Tensor4D;
   }
 
   /*
@@ -590,14 +591,10 @@ class Coconet {
       const predictions = tf.tidy(() => {
         return this.convnet.predictFromPianoroll(pianoroll, innerMasks);
       }) as tf.Tensor4D;
-      // console.log("gibbs predictions")
-      // this.printPianorolls(predictions);
       await tf.nextFrame();
       const newPredictions = softPriors ?
         this.nudgeWithPrior(predictions, softPriors) : predictions;
       await tf.nextFrame();
-      // console.log("gibbs newPredictions")
-      // this.printPianorolls(newPredictions);
       pianoroll = tf.tidy(() => {
         const samples = 
             this.samplePredictions(newPredictions, temperature) as tf.Tensor4D;
