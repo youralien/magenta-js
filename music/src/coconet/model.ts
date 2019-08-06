@@ -23,7 +23,7 @@ import * as tf from '@tensorflow/tfjs-core';
 import {logging, sequences} from '..';
 import {INoteSequence} from '../protobuf';
 
-import {IS_IOS, NUM_PITCHES, pianorollToSequence, sequenceToPianoroll} from './coconet_utils';
+import {IS_IOS, NUM_PITCHES, MIN_PITCH, SCALES, pianorollToSequence, sequenceToPianoroll} from './coconet_utils';
 
 /**
  * An interface for providing an infilling mask.
@@ -47,7 +47,7 @@ interface InfillMask {
  * `{step: number, voice: number}`, indicating which voice should be
  * infilled for a particular step. If this value isn't provided, then the model
  * will attempt to infill all the "silent" steps in the input sequence.
- * @param discourageNotes (Optional) discourageNotes flag saying whether to 
+ * @param discourageNotes (Optional) discourageNotes flag saying whether to
  * adjust gibbs sampling of notes. If true, the sampling is nudged towards not
  * sampling notes from the original pianoroll. If false, the sampling is nudged
  * towards sampling more of the notes. If not provided, sampling remains same.
@@ -60,6 +60,7 @@ interface CoconetConfig {
   infillMask?: InfillMask[];
   discourageNotes?: boolean;
   nudgeFactor?: number;
+  scaleName?: string;
 }
 
 interface LayerSpec {
@@ -461,6 +462,7 @@ class Coconet {
     let discourageNotes;
     let nudgeFactor;
     let softPriors;
+    let scaleName;
 
     if (config) {
       temperature = config.temperature || temperature;
@@ -472,17 +474,18 @@ class Coconet {
         config.discourageNotes : discourageNotes;
       nudgeFactor = (config.nudgeFactor !== undefined) ?
         config.nudgeFactor : nudgeFactor;
-      softPriors = this.priorOverOriginalNotes(
-        pianoroll, discourageNotes, nudgeFactor);
+      scaleName = config.scaleName || scaleName;
+      softPriors = this.computeSoftPrior(
+        pianoroll, discourageNotes, nudgeFactor, scaleName);
     } else {
       outerMasks = this.getCompletionMask(pianoroll);
       numIterations = await this.getNumIterationsFromOuterMasks(outerMasks);
-      softPriors = this.priorOverOriginalNotes(
-        pianoroll, discourageNotes, nudgeFactor);
+      softPriors = this.computeSoftPrior(
+        pianoroll, discourageNotes, nudgeFactor, scaleName);
     }
 
     // Run sampling on the pianoroll.
-    const samples = 
+    const samples =
         await this.run(pianoroll, numIterations, temperature, outerMasks,
                        softPriors);
 
@@ -549,14 +552,25 @@ class Coconet {
     return defaultNumIterations;
   }
 
+  private computeSoftPrior(
+      pianorolls: tf.Tensor4D, discourageNotes: boolean,
+      nudgeFactor: number, scaleName: string): tf.Tensor4D {
+    return tf.tidy(() => {
+      const originalNotePrior = this.priorOverOriginalNotes(pianorolls,
+        discourageNotes, nudgeFactor);
+      const scalePrior = this.getScalePrior(pianorolls, scaleName);
+      return tf.mulStrict(originalNotePrior, scalePrior);
+    });
+  }
+
   /**
    * Idea: we don't care about the mask area of notes that will be
-   * nudged by the soft prior since the masking code already handles 
-   * 
+   * nudged by the soft prior since the masking code already handles
+   *
    * @param {tf.Tensor4D} pianorolls
    * @param {bool} [discourageNotes] if undefined, creates an identity prior
    * @param {number} [nudgeFactor] The probabilities will be
-   * nudged ~ 3^(nudgeFactor)  
+   * nudged ~ 3^(nudgeFactor)
    * @returns {tf.Tensor4D}
    */
   private priorOverOriginalNotes(
@@ -582,6 +596,33 @@ class Coconet {
       // notes in pianoroll to be selected
       tf.mul(tf.scalar(nudgeFactor),
               tf.scalar(0.5).add(pianorolls)) as tf.Tensor4D;
+  }
+
+  private getScalePrior(
+      pianorolls: tf.Tensor4D, scaleName: string): tf.Tensor4D {
+    if (scaleName === undefined) {
+      return tf.onesLike(pianorolls);
+    }
+    const scale = SCALES.find(scale => scale.name === scaleName);
+    if (scale === undefined) {
+      throw new Error(
+        `scaleName ${scaleName} does not exist in known scales.`);
+    }
+    // Create a buffer to store the input.
+    const pitches = tf.buffer([pianorolls.shape[2]]);
+    for (let i = 0; i < scale.notes.length; i++) {
+      pitches.set(1, scale.notes[i] - MIN_PITCH);
+    }
+    // Expand that buffer to the right shape.
+    return tf.tidy(() => {
+      return pitches.toTensor()
+                  .expandDims(0)
+                  .tile([pianorolls.shape[1], 1])
+                  .expandDims(2)
+                  .tile([1, 1, pianorolls.shape[3]])
+                  .expandDims(0)
+                  .tile([pianorolls.shape[0], 1, 1, 1]) as tf.Tensor4D;
+    });
   }
 
   /*
@@ -615,7 +656,7 @@ class Coconet {
         this.nudgeWithPrior(predictions, softPriors) : predictions;
       await tf.nextFrame();
       pianoroll = tf.tidy(() => {
-        const samples = 
+        const samples =
             this.samplePredictions(newPredictions, temperature) as tf.Tensor4D;
         const updatedPianorolls =
             tf.where(tf.cast(innerMasks, 'bool'), samples, pianoroll);

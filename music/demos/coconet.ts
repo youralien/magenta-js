@@ -158,9 +158,81 @@ async function infillSectionDiscourageNotes() {
   model.dispose();
 }
 
+async function infillMajorMinorKey() {
+  const model = new mm.Coconet(`${CHECKPOINTS_DIR}/coconet/bach`);
+  await model.initialize();
+
+  // First voice.
+  const ns = mm.NoteSequence.create();
+
+  // Make a power chord on C and G
+  // non committal to C major or minor 
+  const notesToPlay = [
+    79, // G
+    72, // C
+    67, // G
+    60, // C
+  ];
+  for (let i = 0; i < 32; i++) {
+    // Leave silence for 4 beats, between time steps 4 and 8, to
+    // show that using a mask doesn't infill space.
+    if (i < 8 && i > 4) {
+      continue;
+    }
+    for (let v = 0; v < 4; v++) {
+      const note = new NoteSequence.Note();
+      note.pitch = notesToPlay[v]; // Different pitches for each voice.
+      note.instrument = v;
+      note.quantizedStartStep = i;
+      note.quantizedEndStep = note.quantizedStartStep + 1;
+      ns.notes.push(note);
+    }
+  }
+  ns.quantizationInfo = {stepsPerQuarter: 4};
+  ns.totalQuantizedSteps = 32;
+
+  // Remove everything between timesteps 10 and 30
+  const mask = [];
+  for (let i = 10; i < 30; i++) {
+    // Infill all voices.
+    for (let v = 0; v < 4; v++) {
+      mask.push({step: i, voice: v});
+    }
+  }
+  writeNoteSeqs('input-5', [ns], true);
+  writeNoteSeqs('input-6', [ns], true);
+
+  // do it for Major
+  const startM = performance.now();
+  const outputM = await model.infill(ns, {
+    infillMask: mask,
+    scaleName: 'C',
+  });
+
+  // Optionally, treat any consecutive notes as merged.
+  const fixedOutputM = mergeConsecutiveNotes(outputM);
+  writeNoteSeqs('output-5', [fixedOutputM], true);
+  writeTimer('time-5', startM);
+
+  // do it for Minor
+  const startm = performance.now();
+  const outputm = await model.infill(ns, {
+    infillMask: mask,
+    scaleName: 'Cm',
+  });
+
+  // Optionally, treat any consecutive notes as merged.
+  const fixedOutputm = mergeConsecutiveNotes(outputm);
+  writeNoteSeqs('output-6', [fixedOutputm], true);
+  writeTimer('time-6', startm);
+
+  model.dispose();
+}
+
 try {
   Promise.all([infillFirstVoice(), infillSecondVoice(),
-               infillSection(), infillSectionDiscourageNotes()])
+               infillSection(), infillSectionDiscourageNotes(),
+               infillMajorMinorKey()])
       .then(() => {
         writeMemory(tf.memory().numBytes);
       });
