@@ -456,17 +456,18 @@ class Coconet {
 
     // Figure out the sampling configuration.
     let temperature = 0.99;
-    let numIterations = 96;
+    let numIterations;
     let outerMasks;
     let discourageNotes;
     let nudgeFactor;
     let softPriors;
 
     if (config) {
-      numIterations = config.numIterations || numIterations;
       temperature = config.temperature || temperature;
       outerMasks =
           this.getCompletionMaskFromInput(config.infillMask, pianoroll);
+      numIterations = config.numIterations ||
+        await this.getNumIterationsFromOuterMasks(outerMasks);
       discourageNotes = (config.discourageNotes !== undefined) ?
         config.discourageNotes : discourageNotes;
       nudgeFactor = (config.nudgeFactor !== undefined) ?
@@ -475,6 +476,9 @@ class Coconet {
         pianoroll, discourageNotes, nudgeFactor);
     } else {
       outerMasks = this.getCompletionMask(pianoroll);
+      numIterations = await this.getNumIterationsFromOuterMasks(outerMasks);
+      softPriors = this.priorOverOriginalNotes(
+        pianoroll, discourageNotes, nudgeFactor);
     }
 
     // Run sampling on the pianoroll.
@@ -530,6 +534,21 @@ class Coconet {
     });
   }
 
+  private async getNumIterationsFromOuterMasks(
+      outerMasks: tf.Tensor4D): Promise<number> {
+    const defaultNumIterations = 96;
+    // numIterations ~ batchSize * numQuantizeSteps * numVoices
+    const numIterations = await tf.sum(tf.max(outerMasks, 2)).array();
+    if (typeof numIterations === 'number') {
+      return numIterations;
+    }
+    else if (Array.isArray(numIterations)) {
+      const first = numIterations[0];
+      return (typeof first === 'number') ? first : defaultNumIterations;
+    }
+    return defaultNumIterations;
+  }
+
   /**
    * Idea: we don't care about the mask area of notes that will be
    * nudged by the soft prior since the masking code already handles 
@@ -541,8 +560,8 @@ class Coconet {
    * @returns {tf.Tensor4D}
    */
   private priorOverOriginalNotes(
-      pianorolls: tf.Tensor4D, discourageNotes,
-      nudgeFactor): tf.Tensor4D {
+      pianorolls: tf.Tensor4D, discourageNotes: boolean,
+      nudgeFactor: number): tf.Tensor4D {
     if (discourageNotes === undefined && nudgeFactor === undefined) {
       return tf.onesLike(pianorolls);
     }
